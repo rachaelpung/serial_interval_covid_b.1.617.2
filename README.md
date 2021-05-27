@@ -5,11 +5,13 @@ This repository contains code and data to compare the serial interval in the rec
 ## Quick start guide
 Data for the serial interval observed in household pairs of recent COVID-19 cases infected with the B.1.617.2 variant and cases identified before Apr 2020 are:
 
-xx add in files xx
+householdPair_b.1.617.2.csv
+householdPair_preLD.csv
 
 R scripts to perform the analysis and plots are:
 
-xx add in file xx
+serial_interval.R
+serial_interval_plot.R
 
 ## Citation
 Preprint of the analysis can be found here.
