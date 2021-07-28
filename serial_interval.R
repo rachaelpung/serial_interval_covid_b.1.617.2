@@ -2,76 +2,124 @@ library(sn)
 library(readr)
 library(data.table)
 library(fitdistrplus)
+set.seed(321)
 
-setwd('C:/Users/Sony/Desktop/VOC617')
+setwd('C:/Users/Sony/Desktop/VOC617/serial interval')
 
-casePair_VOC <- fread('householdPair_b.1.617.2.csv')
-casePair_preLD <- fread('householdPair_preLD.csv')
+# load data
+casePair.VOC <- fread('householdPair_b.1.617.2.csv') # household transmission pair infected with B.1.617.2 variant
+casePair.preLD <- fread('householdPair_preLD.csv') # household transmission pair infected prior to partial lockdown
 
-# sample serial interval
-t=sort(casePair_preLD[,unique(ONSET_TO_ISOLATION_INFECTOR)])
+# prepare list of serial interval observed prior to partial lockdown stratified by duration from onset to isolation 
+t=sort(casePair.preLD[,unique(ONSET_TO_ISOLATION_INFECTOR)])
 
 listSerial = lapply(1:(max(t)+1), function(i){
-  casePair_preLD[ONSET_TO_ISOLATION_INFECTOR==i-1, SERIAL_INT]
+  casePair.preLD[ONSET_TO_ISOLATION_INFECTOR==i-1, SERIAL_INT]
 })
 
-sampleSerialInt = data.table(ITER = rep(1:1000, each = casePair_VOC[,.N]),
-                             ONSET_TO_ISOLATION = rep(casePair_VOC[,ONSET_TO_ISOLATION_INFECTOR], times = 1000))
-sampleSerialInt[, SERIAL_INTERVAL := sample(listSerial[[(ONSET_TO_ISOLATION+1)]], 1, replace = T), 
+# for each duration of onset to isolation observed in recent B.1.617.2 household infector, 
+# sample the equivalent serial interval observed prior to the partial lockdown and calculate the differences
+sampleSerialInt = data.table(ITER = rep(1:1000, each = casePair.VOC[,.N]),
+                             ONSET_TO_ISOLATION = rep(casePair.VOC[,ONSET_TO_ISOLATION_INFECTOR], times = 1000))
+sampleSerialInt[, SERIAL_INTERVAL_PRE_LD := sample(listSerial[[(ONSET_TO_ISOLATION+1)]], 1, replace = T), 
                 by = seq_len(nrow(sampleSerialInt))]
 
+
 # test fit parameteric distribution 
-dat = sampleSerialInt[ITER == 1, SERIAL_INTERVAL]
+dat = sampleSerialInt[ITER == 1, SERIAL_INTERVAL_PRE_LD]
 skew_mod <-  selm(dat ~ 1) # selm is "skew-elliptic lm"
 summary(skew_mod)
 
-hist(dat,prob=TRUE,nclass="scott") # "scott" is from MASS
-plot(function(x) dsn(x, dp=skew_mod@param$dp), from=-3, to=14, col="red", add=TRUE)
+hist(dat,prob=TRUE,breaks = seq(-3,15,1))
+plot(function(x) dsn(x, dp=skew_mod@param$dp), from=-3, to=15, col="red", add=TRUE)
 
 # fit parametric distribution for each iteration's samples
-set.seed(123)
-fitSerialInt = lapply(1:1000, function(i){
+# calculate pmf and cdf
+fitSerialInt.preLD = lapply(1:1000, function(i){
   
-  x = sampleSerialInt[ITER == i, SERIAL_INTERVAL]
+  x = sampleSerialInt[ITER == i, SERIAL_INTERVAL_PRE_LD]
   skew_mod =  selm(x ~ 1) # selm is "skew-elliptic lm"
-  fit = dsn(-3:14, dp=skew_mod@param$dp)
+  fit = dsn(-3:15, dp=skew_mod@param$dp)
   fit = fit/sum(fit)
+  
+  return(list(skew_mod@param$dp, fit))
   
 })
 
-distSerialInt = data.table(ITER = rep(1:1000, each = length(-3:14)), 
-                           SERIAL_INTERVAL = rep(-3:14, times = 1000),
-                           PDF = unlist(fitSerialInt))
-distSerialInt[,CDF:=cumsum(PDF), by=.(ITER)]
+distSerialInt = data.table(ITER = rep(1:1000, each = length(-3:15)), 
+                           SERIAL_INTERVAL = rep(-3:15, times = 1000),
+                           PMF_PRE_LD = unlist(lapply(fitSerialInt.preLD, `[[`, 2)))
+distSerialInt[,CDF_PRE_LD:=cumsum(PMF_PRE_LD), by=.(ITER)]
 
-distSerialInt[sampleSerialInt[,.N, by=.(ITER,SERIAL_INTERVAL)],
-              PDF_NON_FIT:=i.N,on=c(ITER='ITER',SERIAL_INTERVAL='SERIAL_INTERVAL')]
-distSerialInt[is.na(PDF_NON_FIT),PDF_NON_FIT:=0]
-distSerialInt[,PDF_NON_FIT:=PDF_NON_FIT/casePair_VOC[,.N]]
-distSerialInt[,CDF_NON_FIT:=cumsum(PDF_NON_FIT),by=.(ITER)]
 
-# mean and 95%CI of mean serial interval for all iterations
-distSerialInt[,MEAN:=PDF*SERIAL_INTERVAL]
-summary(distSerialInt[,sum(MEAN), by=.(ITER)]$V1)
-quantile(distSerialInt[,sum(MEAN), by=.(ITER)]$V1, probs = c(0.025,0.975))
 
-# tabulate median serial interval for all iterations
-mean(distSerialInt[CDF>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1)
-table(distSerialInt[CDF>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1)
-quantile(distSerialInt[CDF>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1, probs = c(0.025,0.975))
+# mean and 95%CI of the mean of serial intervals sampled from pre lockdown cases for all iterations
+distSerialInt[,MEAN_PRE_LD:=PMF_PRE_LD*SERIAL_INTERVAL]
+mean_mean.preLD = mean(distSerialInt[,sum(MEAN_PRE_LD), by=.(ITER)]$V1)
+ci_mean.preLD = quantile(distSerialInt[,sum(MEAN_PRE_LD), by=.(ITER)]$V1, probs = c(0.025,0.975))
 
-# tabulate mode serial interval for all iterations
-t = -3:14
-t[distSerialInt[,which.max(PDF), by=.(ITER)]$V1]
-mean(t[distSerialInt[,which.max(PDF), by=.(ITER)]$V1])
-table(t[distSerialInt[,which.max(PDF), by=.(ITER)]$V1])
-quantile(t[distSerialInt[,which.max(PDF), by=.(ITER)]$V1], probs = c(0.025,0.975))
+# mean serial  interval of B.1.617.2 cases 
+mean_VOC = mean(casePair.VOC$SERIAL_INT)
 
-distSerialInt = distSerialInt[,.(mean(PDF), quantile(PDF, probs = 0.025), quantile(PDF, probs = 0.975),
-                                 mean(CDF), quantile(CDF, probs = 0.025), quantile(CDF, probs = 0.975),
-                                 mean(PDF_NON_FIT), quantile(PDF_NON_FIT, probs = 0.025), quantile(PDF_NON_FIT, probs = 0.975),
-                                 mean(CDF_NON_FIT), quantile(CDF_NON_FIT, probs = 0.025), quantile(CDF_NON_FIT, probs = 0.975)), 
+# differences in mean
+difference.in.mean = mean_VOC - distSerialInt[,sum(MEAN_PRE_LD), by=.(ITER)]$V1
+mean_difference.in.mean = mean(difference.in.mean)
+ci_difference.in.mean = quantile(difference.in.mean, probs = c(0.025,0.975))
+
+output_mean = c(mean_VOC, mean_mean.preLD, ci_mean.preLD, mean_difference.in.mean, ci_difference.in.mean)
+
+# mean and 95%CI of the median of serial intervals sampled from pre lockdown cases for all iterations
+mean_median.preLD = mean(distSerialInt[CDF_PRE_LD>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1)
+table(distSerialInt[CDF_PRE_LD>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1)
+ci_median.preLD = quantile(distSerialInt[CDF_PRE_LD>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1, probs = c(0.025,0.975))
+
+# median serial  interval of B.1.617.2 cases 
+median_VOC = median(casePair.VOC$SERIAL_INT)
+
+# differences in median
+difference.in.median = median_VOC - distSerialInt[CDF_PRE_LD>=0.5, min(SERIAL_INTERVAL), by=.(ITER)]$V1 
+mean_difference.in.median = mean(difference.in.median)
+ci_difference.in.median = quantile(difference.in.median, probs = c(0.025,0.975))
+
+output_median = c(median_VOC, mean_median.preLD, ci_median.preLD, mean_difference.in.median, ci_difference.in.median)
+
+# mean and 95%CI of the mode of serial intervals sampled from pre lockdown cases for all iterations
+t = -3:15
+t[distSerialInt[,which.max(PMF_PRE_LD), by=.(ITER)]$V1]
+mean_mode.preLD = mean(t[distSerialInt[,which.max(PMF_PRE_LD), by=.(ITER)]$V1])
+table(t[distSerialInt[,which.max(PMF_PRE_LD), by=.(ITER)]$V1])
+ci_mode.preLD = quantile(t[distSerialInt[,which.max(PMF_PRE_LD), by=.(ITER)]$V1], probs = c(0.025,0.975))
+
+# mode of the serial  interval distribution of B.1.617.2 cases 
+mode_VOC = 2
+  
+# differences in mode
+difference.in.mode = mode_VOC - t[distSerialInt[,which.max(PMF_PRE_LD), by=.(ITER)]$V1] 
+mean_difference.in.mode = mean(difference.in.mode)
+ci_difference.in.mode = quantile(difference.in.mode, probs = c(0.025,0.975))
+
+output_mode = c(mode_VOC, mean_mode.preLD, ci_mode.preLD, mean_difference.in.mode, ci_difference.in.mode)
+
+
+# prep distribution data for plots
+distSerialInt = distSerialInt[,.(mean(PMF_PRE_LD), quantile(PMF_PRE_LD, probs = 0.025), quantile(PMF_PRE_LD, probs = 0.975),
+                                 mean(CDF_PRE_LD), quantile(CDF_PRE_LD, probs = 0.025), quantile(CDF_PRE_LD, probs = 0.975)),
                               by=.(SERIAL_INTERVAL)]
-setnames(distSerialInt, old=c('V1','V2','V3','V4','V5','V6','V7','V8','V9','V10','V11','V12'), 
-         new=c('PMF_MEAN', 'PMF_LOWER_CI', 'PMF_UPPER_CI', 'CMF_MEAN', 'CMF_LOWER_CI', 'CMF_UPPER_CI',
-               'PMF_NF_MEAN', 'PMF_NF_LOWER_CI', 'PMF_NF_UPPER_CI', 'CMF_NF_MEAN', 'CMF_NF_LOWER_CI', 'CMF_NF_UPPER_CI'))
+setnames(distSerialInt, 
+         c('SERIAL_INTERVAL', 'PMF_PRE_LD_MEAN', 'PMF_PRE_LD_LOWER_CI', 'PMF_PRE_LD_UPPER_CI', 
+           'CDF_PRE_LD_MEAN', 'CDF_PRE_LD_LOWER_CI', 'CDF_PRE_LD_UPPER_CI'))
+
+
+# prep summary table
+outputTable = rbind(output_mean, output_median, output_mode)
+outputTable = signif(outputTable,2)
+colnames(outputTable) = NULL
+outputTable = as.data.table(outputTable, keep.rownames=T)
+
+outputTable$rn = c('Mean', 'Median', 'Mode')
+outputTable$V2 = paste(outputTable$V2, ' (', outputTable$V3, '-', outputTable$V4, ')', sep = '')
+outputTable$V5 = paste(outputTable$V5, ' (', outputTable$V6, '-', outputTable$V7, ')', sep = '')
+outputTable$V3 = outputTable$V4 = outputTable$V6 = outputTable$V7 = NULL
+
+colnames(outputTable) = c('Summary statistic', 'Observed in B.1.617.2 cases', 'Bootstrap sample mean (95% CI)', 'Differenc (95% CI)')
+write.csv(outputTable, 'C:/Users/Sony/Desktop/VOC617/supp_table.csv', row.names = F)
