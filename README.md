@@ -14,6 +14,6 @@ serial_interval.R<br/>
 serial_interval_plot.R
 
 ## Citation
-Preprint of the analysis can be found [here](https://www.medrxiv.org/content/10.1101/2021.06.04.21258205v1).
+Published analysis can be found [here](https://www.thelancet.com/journals/lancet/article/PIIS0140-6736(21)01697-4/fulltext).
 
 If you plan to build on or cite this preliminary analysis for an academic publication, please ensure that you credit the underlying data sources above appropriately.
